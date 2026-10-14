@@ -211,6 +211,33 @@ def _kiro_user_data_lines():
         # Make kiro-cli available system-wide on the PATH.
         "if [ -x /home/kiro/.local/bin/kiro-cli ]; then ln -sf /home/kiro/.local/bin/kiro-cli /usr/local/bin/kiro-cli; fi",
         'echo "export PATH=\\"/home/kiro/.local/bin:$PATH\\"" > /etc/profile.d/kiro-cli.sh',
+        # Message of the day shown on every SSM/login shell. This host is
+        # designed to run as root with unlimited privileges on the host, so
+        # recommend "sudo su" as the first step. Also note that Kiro may only
+        # be installed under root, not the current (ssm-user) user.
+        "cat > /etc/motd <<'EOF'",
+        "",
+        "============================================================",
+        " Kiro CLI host",
+        "============================================================",
+        " This host is designed to run as root with unlimited",
+        " privileges on the host, so we recommend \"sudo su\" as your",
+        " first step.",
+        "",
+        " NOTE: Kiro may not be installed as your user, only root.",
+        "============================================================",
+        "",
+        "EOF",
+        # SSM Session Manager shells do not always pass through PAM login, so
+        # /etc/motd may not be printed. Also emit the message from a profile.d
+        # script so it is shown on every interactive shell startup.
+        "cat > /etc/profile.d/kiro-motd.sh <<'EOF'",
+        "#!/bin/sh",
+        "case \"$-\" in",
+        "  *i*) [ -r /etc/motd ] && cat /etc/motd ;;",
+        "esac",
+        "EOF",
+        "chmod 0644 /etc/profile.d/kiro-motd.sh",
         # Record the result for easy verification over SSM.
         "( /usr/local/bin/kiro-cli --version || /home/kiro/.local/bin/kiro-cli --version ) "
         "> /var/log/kiro-version.txt 2>&1 || echo 'kiro-cli not on PATH yet' > /var/log/kiro-version.txt",
