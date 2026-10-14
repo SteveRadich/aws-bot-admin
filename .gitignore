@@ -1,0 +1,50 @@
+# CDK
+cdk.out/
+.cdk.staging/
+
+# NOTE: cdk.context.json is intentionally committed (per CDK guidance) so the
+# cached VPC lookup is reproducible. Do not ignore it.
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Terraform (for the Terraform/management-script output this repo may grow)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+# Secrets / credentials — never commit these (see WARNING.md)
+*.pem
+*.key
+*.pfx
+.env
+.env.*
+*.credentials
+credentials
+aws.json
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*~
