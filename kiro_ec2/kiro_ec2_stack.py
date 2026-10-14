@@ -28,6 +28,7 @@ from aws_cdk import (
     Tags,
     aws_ec2 as ec2,
     aws_iam as iam,
+    aws_ssm as ssm,
 )
 from constructs import Construct
 
@@ -155,6 +156,52 @@ class KiroEc2Stack(Stack):
         Tags.of(instance).add("Name", "kiro-cli-host")
 
         # ------------------------------------------------------------------
+        # Session Manager shell preferences.
+        #
+        # Session Manager's default shell is a bare, NON-login interactive
+        # `sh`: it sources none of the usual init files (/etc/profile,
+        # /etc/profile.d/*, /etc/bashrc, ~/.bash*), so the login banner the
+        # user data drops into /etc/profile.d/kiro-motd.sh never fires on a
+        # Session Manager connect. The documented hook is the Session
+        # Manager *shell profile* (shellProfile.linux), whose commands run at
+        # session start. We exec a bash *login* shell there, which then does
+        # source /etc/profile.d/kiro-motd.sh and prints /etc/kiro-banner.txt.
+        #
+        # Note: SSM-SessionManagerRunShell is an account/region-wide
+        # preferences document (only one may exist per region). This stack is
+        # intended to own the account (see WARNING.md), so managing it here is
+        # appropriate; be aware it affects all Session Manager shell sessions
+        # in the region.
+        # ------------------------------------------------------------------
+        ssm.CfnDocument(
+            self,
+            "SessionManagerPrefs",
+            name="SSM-SessionManagerRunShell",
+            document_type="Session",
+            document_format="JSON",
+            update_method="NewVersion",
+            content={
+                "schemaVersion": "1.0",
+                "description": "Session Manager shell preferences for the Kiro host (login bash shell so the banner prints).",
+                "sessionType": "Standard_Stream",
+                "inputs": {
+                    "s3BucketName": "",
+                    "s3KeyPrefix": "",
+                    "s3EncryptionEnabled": True,
+                    "cloudWatchLogGroupName": "",
+                    "cloudWatchEncryptionEnabled": True,
+                    "cloudWatchStreamingEnabled": False,
+                    "idleSessionTimeout": "20",
+                    "shellProfile": {
+                        # A login shell sources /etc/profile.d/kiro-motd.sh,
+                        # which prints /etc/kiro-banner.txt exactly once.
+                        "linux": "exec bash -l",
+                    },
+                },
+            },
+        )
+
+        # ------------------------------------------------------------------
         # Outputs.
         # ------------------------------------------------------------------
         CfnOutput(self, "InstanceId", value=instance.instance_id)
@@ -211,11 +258,21 @@ def _kiro_user_data_lines():
         # Make kiro-cli available system-wide on the PATH.
         "if [ -x /home/kiro/.local/bin/kiro-cli ]; then ln -sf /home/kiro/.local/bin/kiro-cli /usr/local/bin/kiro-cli; fi",
         'echo "export PATH=\\"/home/kiro/.local/bin:$PATH\\"" > /etc/profile.d/kiro-cli.sh',
-        # Message of the day shown on every SSM/login shell. This host is
+        # Login banner shown on every SSM / interactive shell. This host is
         # designed to run as root with unlimited privileges on the host, so
         # recommend "sudo su" as the first step. Also note that Kiro may only
         # be installed under root, not the current (ssm-user) user.
-        "cat > /etc/motd <<'EOF'",
+        #
+        # IMPORTANT: do NOT write to /etc/motd on Amazon Linux 2023. There
+        # /etc/motd is a symlink to /var/lib/update-motd/motd, a file owned by
+        # the `update-motd` package that is regenerated on boot and reset
+        # whenever package updates are available -- any content we write there
+        # gets clobbered. Instead we keep our banner in a dedicated file and
+        # print it ourselves. SSM Session Manager also does not open a PAM
+        # "login" session, so the normal motd-on-login path never runs; the
+        # only reliable hook is /etc/profile.d (sourced by the interactive
+        # sh/bash that Session Manager starts).
+        "cat > /etc/kiro-banner.txt <<'EOF'",
         "",
         "============================================================",
         " Kiro CLI host",
@@ -228,13 +285,25 @@ def _kiro_user_data_lines():
         "============================================================",
         "",
         "EOF",
-        # SSM Session Manager shells do not always pass through PAM login, so
-        # /etc/motd may not be printed. Also emit the message from a profile.d
-        # script so it is shown on every interactive shell startup.
+        "chmod 0644 /etc/kiro-banner.txt",
+        # Neutralize the dynamic motd so it does not print competing/empty
+        # content. Dropping the execute bit on the update-motd.d scripts
+        # stops regeneration; failures are non-fatal on images without it.
+        "chmod -x /etc/update-motd.d/* 2>/dev/null || true",
+        # Print our banner from a profile.d script. This is sourced by the
+        # interactive login shell that Session Manager launches (sh by
+        # default, or bash). Guards: only for interactive shells, print once
+        # per session, and only if the banner file exists.
         "cat > /etc/profile.d/kiro-motd.sh <<'EOF'",
-        "#!/bin/sh",
+        "# Show the Kiro host banner once per interactive shell session.",
         "case \"$-\" in",
-        "  *i*) [ -r /etc/motd ] && cat /etc/motd ;;",
+        "  *i*)",
+        "    if [ -z \"${KIRO_BANNER_SHOWN:-}\" ] && [ -r /etc/kiro-banner.txt ]; then",
+        "      KIRO_BANNER_SHOWN=1",
+        "      export KIRO_BANNER_SHOWN",
+        "      cat /etc/kiro-banner.txt",
+        "    fi",
+        "    ;;",
         "esac",
         "EOF",
         "chmod 0644 /etc/profile.d/kiro-motd.sh",
